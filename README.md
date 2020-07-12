@@ -150,3 +150,60 @@ pip install -r requirements-customtf.txt
 make tensorflow
 pip install -U tf_nightly-1.14.0-cp37-cp37m-*
 ```
+
+=====================================补充mac系统安装部署====================================================
+mac catalina 10.15.1
+Apple clang version 11.0.0 (clang-1100.0.33.17)
+Target: x86_64-apple-darwin19.0.0
+
+1. 编译tensorflow
+按照[tensorflow文档](https://www.tensorflow.org/install/source)，
+安装依赖
+```
+pip install -U --user pip six numpy wheel setuptools mock 'future>=0.17.1'
+pip install -U --user keras_applications --no-deps
+pip install -U --user keras_preprocessing --no-deps
+```
+
+babel 0.26.1
+git checkout -b r1.14 https://github.com/tensorflow/tensorflow.git
+./configure
+bazel build //tensorflow/tools/pip_package:build_pip_package (时间较长，几个小时)
+./bazel-bin/tensorflow/tools/pip_package/build_pip_package /tmp/tensorflow_pkg
+pip install /tmp/tensorflow_pkg/tensorflow-version-tags.whl
+
+2. 安装tf_seal
+替换configure.sh、external/tf/BUILD.tpl、external/tf/tf_configure.bzl中的libtensorflow_framework.so为libtensorflow_framework.dylib
+setup.py注释掉tf_nightly >=1.14.0, <2"
+tf_seal/BUILD中-D_GLIBCXX_USE_CXX11_ABI=0
+
+修复getNodeAttr符号查找问题，按照[issue](https://github.com/tensorflow/tensorflow/issues/23561)做法
+在tf_seal/cc/kernels/key_variants.h、tf_seal/cc/kernels/seal_kernels.cc、tf_seal/cc/kernels/seal_tensors.h中
+增加
+#include "absl/base/config.h"
+#undef ABSL_HAVE_STD_STRING_VIEW
+在#include "tensorflow/core/framework/op_kernel.h"前
+
+运行程序
+```
+import numpy as np
+import tensorflow as tf
+import tf_seal as tfs
+
+public_keys, secret_key = tfs.seal_key_gen(gen_relin=True, gen_galois=True)
+
+a = tf.random.normal(shape=(2, 3), dtype=tf.float32)
+b = tf.random.normal(shape=(2, 3), dtype=tf.float32)
+c = tf.matmul(a, tf.transpose(b))
+
+a_encrypted = tfs.convert_to_tensor(a, secret_key, public_keys)
+b_encrypted = tfs.convert_to_tensor(b, secret_key, public_keys)
+c_encrypted = tfs.matmul(a_encrypted, b_encrypted)
+
+
+with tf.Session() as sess:
+  expected, actual = sess.run([c, c_encrypted])
+  print(expected)
+  print(actual)
+```
+
